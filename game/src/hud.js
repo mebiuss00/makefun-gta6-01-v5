@@ -66,6 +66,23 @@ export function drawMinimap(ctx, g, objective) {
     ctx.arc(x0 + cop.x * sx, y0 + cop.y * sy, 2.2, 0, Math.PI * 2);
     ctx.fill();
   }
+  // Roadblocks as small orange squares.
+  ctx.fillStyle = '#e86a17';
+  for (const rb of g.roadblocks ?? []) {
+    ctx.fillRect(x0 + rb.x * sx - 3, y0 + rb.y * sy - 3, 6, 6);
+  }
+  // AIR ONE as a white dot with a gold ring.
+  if (g.heli) {
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(x0 + g.heli.x * sx, y0 + g.heli.y * sy, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#ffd23d';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.arc(x0 + g.heli.x * sx, y0 + g.heli.y * sy, 5.6, 0, Math.PI * 2);
+    ctx.stroke();
+  }
   // The objective breathes.
   if (objective) {
     const r = 4 + Math.sin(g.time * 5) * 1.4;
@@ -124,6 +141,27 @@ export function drawHud(ctx, g, objective) {
       if (active && g.watched && Math.floor(g.time * 4) % 2 === 0) ctx.fillStyle = '#ff9d3d';
       ctx.fillText('★', W - 18 - (4 - s) * 24, MAP_H + 52);
     }
+  }
+
+  // PPD dispatch callouts, top-centre, fading out over their last 0.6 seconds.
+  if (g.dispatch && g.time < g.dispatch.until) {
+    const remain = g.dispatch.until - g.time;
+    ctx.save();
+    ctx.globalAlpha = clamp(remain / 0.6, 0, 1);
+    ctx.font = '15px system-ui, sans-serif';
+    const msgW = ctx.measureText(g.dispatch.text).width;
+    ctx.font = '700 13px system-ui, sans-serif';
+    const labelW = ctx.measureText('PPD DISPATCH').width;
+    const dw = Math.max(labelW, msgW) + 36;
+    panel(ctx, W / 2 - dw / 2, 14, dw, 52, 0.68);
+    ctx.fillStyle = '#3de2d0';
+    ctx.font = '700 13px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('PPD DISPATCH', W / 2, 34);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '15px system-ui, sans-serif';
+    ctx.fillText(g.dispatch.text, W / 2, 56);
+    ctx.restore();
   }
 
   // Objective, bottom-left.

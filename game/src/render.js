@@ -423,6 +423,38 @@ export function drawWorld(ctx, g, cam, objective) {
   drawRoads(ctx, g, cam);
   drawBuildings(ctx, g, cam, darkness);
   drawProps(ctx, g, cam);
+  // Roadblock barricades: a striped bar across the road, with cones at its feet.
+  for (const rb of g.roadblocks ?? []) {
+    ctx.save();
+    ctx.translate(rb.x, rb.y);
+    if (rb.axis === 'street') ctx.rotate(Math.PI / 2);
+    // The bar runs along X here, spanning the road's 92px width.
+    for (let s = -46; s < 46; s += 12) {
+      ctx.fillStyle = (Math.floor((s + 46) / 12) % 2 === 0) ? '#e86a17' : '#f2f2f2';
+      ctx.fillRect(s, -4, 12, 8);
+    }
+    ctx.fillStyle = 'rgba(20,20,30,0.35)';
+    ctx.fillRect(-46, 4, 92, 3);
+    for (const cxo of [-38, -14, 14, 38]) {
+      ctx.fillStyle = '#e86a17';
+      ctx.beginPath();
+      ctx.moveTo(cxo, 6);
+      ctx.lineTo(cxo - 4, 15);
+      ctx.lineTo(cxo + 4, 15);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#f2f2f2';
+      ctx.fillRect(cxo - 2.4, 10, 4.8, 2.4);
+    }
+    ctx.restore();
+  }
+  // AIR ONE casts a soft shadow on the streets below it.
+  if (g.heli) {
+    ctx.fillStyle = 'rgba(20,20,30,0.22)';
+    ctx.beginPath();
+    ctx.ellipse(g.heli.x + 26, g.heli.y + 34, 30, 13, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
   if (objective) drawObjectiveMarker(ctx, g, objective);
 
   for (const car of g.cars) {
@@ -485,21 +517,79 @@ export function drawWorld(ctx, g, cam, objective) {
     ctx.fillRect(0, 0, cam.w, cam.h);
   }
   // Lamp light pools, drawn after the dark so they read as light.
-  if (darkness > 0.2) {
+  if (darkness > 0.2 || g.heli) {
     ctx.save();
     ctx.translate(-cam.x, -cam.y);
-    for (const prop of g.city.props) {
-      if (prop.kind !== 'lamp') continue;
-      if (prop.x < cam.x - 70 || prop.y < cam.y - 70 || prop.x > cam.x + cam.w + 70 || prop.y > cam.y + cam.h + 70) continue;
-      const grad = ctx.createRadialGradient(prop.x, prop.y, 2, prop.x, prop.y, 46);
-      grad.addColorStop(0, 'rgba(255,217,138,0.5)');
-      grad.addColorStop(1, 'rgba(255,217,138,0)');
-      ctx.fillStyle = grad;
+    if (darkness > 0.2) {
+      for (const prop of g.city.props) {
+        if (prop.kind !== 'lamp') continue;
+        if (prop.x < cam.x - 70 || prop.y < cam.y - 70 || prop.x > cam.x + cam.w + 70 || prop.y > cam.y + cam.h + 70) continue;
+        const grad = ctx.createRadialGradient(prop.x, prop.y, 2, prop.x, prop.y, 46);
+        grad.addColorStop(0, 'rgba(255,217,138,0.5)');
+        grad.addColorStop(1, 'rgba(255,217,138,0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(prop.x, prop.y, 46, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ffd98a';
+        ctx.fillRect(prop.x - 2, prop.y - 2, 4, 4);
+      }
+    }
+    // AIR ONE, drawn last so its searchlight lies over the dark like the lamps' pools:
+    // a translucent cone widening from the helicopter down to a bright pool on the player.
+    if (g.heli) {
+      const heli = g.heli;
+      const px = g.player.x;
+      const py = g.player.y;
+      const pool = ctx.createRadialGradient(px, py, 6, px, py, 120);
+      pool.addColorStop(0, 'rgba(255,244,190,0.55)');
+      pool.addColorStop(0.7, 'rgba(255,244,190,0.22)');
+      pool.addColorStop(1, 'rgba(255,244,190,0)');
+      ctx.fillStyle = pool;
       ctx.beginPath();
-      ctx.arc(prop.x, prop.y, 46, 0, Math.PI * 2);
+      ctx.arc(px, py, 120, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = '#ffd98a';
-      ctx.fillRect(prop.x - 2, prop.y - 2, 4, 4);
+      const cone = ctx.createLinearGradient(heli.x, heli.y, px, py);
+      cone.addColorStop(0, 'rgba(255,244,190,0.10)');
+      cone.addColorStop(1, 'rgba(255,244,190,0.28)');
+      ctx.fillStyle = cone;
+      ctx.beginPath();
+      ctx.moveTo(heli.x, heli.y);
+      const perp = Math.atan2(py - heli.y, px - heli.x) + Math.PI / 2;
+      ctx.lineTo(px + Math.cos(perp) * 105, py + Math.sin(perp) * 105);
+      ctx.lineTo(px - Math.cos(perp) * 105, py - Math.sin(perp) * 105);
+      ctx.closePath();
+      ctx.fill();
+      // The helicopter itself, top-down: dark body, tail boom and fin, spinning rotor.
+      ctx.save();
+      ctx.translate(heli.x, heli.y);
+      ctx.rotate(heli.angle);
+      ctx.fillStyle = '#1d2733';
+      ctx.beginPath();
+      ctx.ellipse(-16, 0, 9, 5, 0, 0, Math.PI * 2); // tail boom
+      ctx.fill();
+      ctx.fillRect(-30, -7, 6, 14); // tail fin
+      roundRect(ctx, -14, -10, 30, 20, 9); // body
+      ctx.fill();
+      ctx.fillStyle = 'rgba(140,200,235,0.85)';
+      roundRect(ctx, 4, -7, 9, 14, 4); // cockpit glass
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(230,236,240,0.8)';
+      ctx.lineWidth = 2.4;
+      const rotor = g.time * 31;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(rotor) * -27, Math.sin(rotor) * -27);
+      ctx.lineTo(Math.cos(rotor) * 27, Math.sin(rotor) * 27);
+      ctx.moveTo(Math.cos(rotor + Math.PI / 2) * -27, Math.sin(rotor + Math.PI / 2) * -27);
+      ctx.lineTo(Math.cos(rotor + Math.PI / 2) * 27, Math.sin(rotor + Math.PI / 2) * 27);
+      ctx.stroke();
+      if (Math.floor(g.time * 2.4) % 2 === 0) {
+        ctx.fillStyle = '#ff3b30';
+        ctx.beginPath();
+        ctx.arc(-27, 0, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
     }
     ctx.restore();
   }

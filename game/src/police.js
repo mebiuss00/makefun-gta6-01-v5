@@ -6,6 +6,7 @@
 import {
   STAR_THRESHOLDS, HEAT_DECAY_HIDDEN, HEAT_DECAY_SEEN, SIGHT_RANGE, POLICE_CARS_BY_STAR,
   POLICE_FOOT_BY_STAR, POLICE_SHOOT_STARS, POLICE_CAR_TYPE, BUST_RADIUS, BUST_FILL_TIME, LAND_H,
+  ROADBLOCK_STARS, ROADBLOCKS_BY_STAR, AIR_ONE_STARS, AIR_ONE_RANGE,
 } from './config.js';
 import { avenueCenterX, streetCenterY, collideWorld } from './city.js';
 import { clamp, dist, randRange, angleDelta } from './random.js';
@@ -41,8 +42,170 @@ function roadPointNear(g, minD, maxD) {
   return null;
 }
 
+// The named voice of the chase: PPD dispatch announces every escalation, and the
+// stand-down when the suspect finally slips away. The HUD prefixes these with
+// "PPD DISPATCH", so the stored text is the message itself.
+const DISPATCH_LINES = [
+  '',
+  'All units, we have a report — one cruiser respond.',
+  'Suspect is mobile. Cruisers converge, do not lose them.',
+  'Roadblocks authorized. Seal the road ahead of the suspect.',
+  'AIR ONE, you are cleared to launch. Keep the suspect in your searchlight.',
+  'Citywide — every unit. Do not let that vehicle leave Palmera.',
+];
+const DISPATCH_STAND_DOWN = 'Suspect lost. All units stand down.';
+
+function fireDispatch(g, text) {
+  g.dispatch = { text, until: g.time + 4.6 };
+}
+
+function updateDispatch(g) {
+  const stars = g.stars;
+  if (stars > (g.announcedStars ?? 0)) {
+    g.announcedStars = stars;
+    if (DISPATCH_LINES[stars]) fireDispatch(g, DISPATCH_LINES[stars]);
+  } else if (stars === 0 && (g.announcedStars ?? 0) > 0) {
+    fireDispatch(g, DISPATCH_STAND_DOWN);
+    g.announcedStars = 0;
+  }
+}
+
+// --- roadblocks ---------------------------------------------------------------------------
+// At three stars dispatch stops chasing from behind and seals the road ahead instead:
+// two cruisers parked across the suspect's road, with a barricade between them.
+
+function teardownRoadblock(g, rb) {
+  for (const car of rb.cars) {
+    if (car.driver === 'police' && car.roadblock) {
+      car.driver = 'traffic';
+      car.roadblock = false;
+      giveTrafficBrain(car, g.rng);
+    }
+  }
+}
+
+function spawnRoadblock(g) {
+  const p = g.player;
+  // Aim ahead of the player along their heading; in a car, along the car's motion.
+  let heading = p.angle;
+  if (p.car) heading = p.car.speed < 0 ? p.car.angle + Math.PI : p.car.angle;
+  const ahead = randRange(g.rng, 430, 520);
+  const aimX = clamp(p.x + Math.cos(heading) * ahead, 40, 3188);
+  const aimY = clamp(p.y + Math.sin(heading) * ahead, 40, LAND_H - 40);
+  // Find the avenue and street nearest the aim point.
+  let avX = avenueCenterX(0);
+  let avD = Infinity;
+  for (let i = 0; i <= 8; i++) {
+    const d = Math.abs(avenueCenterX(i) - aimX);
+    if (d < avD) { avD = d; avX = avenueCenterX(i); }
+  }
+  let stY = streetCenterY(0);
+  let stD = Infinity;
+  for (let j = 0; j <= 6; j++) {
+    const d = Math.abs(streetCenterY(j) - aimY);
+    if (d < stD) { stD = d; stY = streetCenterY(j); }
+  }
+  const mostlyVertical = Math.abs(Math.sin(heading)) > Math.abs(Math.cos(heading));
+  let rb;
+  if (avD <= stD || mostlyVertical) {
+    rb = { x: avX, y: aimY, axis: 'avenue', cars: [] };
+    for (const off of [-24, 24]) {
+      const car = makeCar(POLICE_CAR_TYPE, avX + off, aimY, 0, POLICE_CAR_TYPE.colors[0]);
+      car.driver = 'police';
+      car.copOut = true;
+      car.speed = 0;
+      car.roadblock = true;
+      car.postX = avX + off;
+      car.postY = aimY;
+      car.postAngle = 0;
+      g.cars.push(car);
+      rb.cars.push(car);
+    }
+  } else {
+    rb = { x: aimX, y: stY, axis: 'street', cars: [] };
+    for (const off of [-24, 24]) {
+      const car = makeCar(POLICE_CAR_TYPE, aimX, stY + off, Math.PI / 2, POLICE_CAR_TYPE.colors[0]);
+      car.driver = 'police';
+      car.copOut = true;
+      car.speed = 0;
+      car.roadblock = true;
+      car.postX = aimX;
+      car.postY = stY + off;
+      car.postAngle = Math.PI / 2;
+      g.cars.push(car);
+      rb.cars.push(car);
+    }
+  }
+  g.roadblocks.push(rb);
+}
+
+export function updateRoadblocks(g, dt) {
+  if (!g.roadblocks) g.roadblocks = [];
+  const p = g.player;
+  let heading = p.angle;
+  if (p.car) heading = p.car.speed < 0 ? p.car.angle + Math.PI : p.car.angle;
+  // Tear down blocks the chase has moved past, outgrown or left behind.
+  for (let i = g.roadblocks.length - 1; i >= 0; i--) {
+    const rb = g.roadblocks[i];
+    const d = dist(rb.x, rb.y, p.x, p.y);
+    const passed = (p.x - rb.x) * Math.cos(heading) + (p.y - rb.y) * Math.sin(heading);
+    if (g.stars < ROADBLOCK_STARS || d > 760 || passed > 240) {
+      teardownRoadblock(g, rb);
+      g.roadblocks.splice(i, 1);
+    }
+  }
+  const desired = g.stars >= ROADBLOCK_STARS ? ROADBLOCKS_BY_STAR[g.stars] : 0;
+  if (g.roadblocks.length < desired && g.time >= (g.roadblockAt ?? 0)) {
+    g.roadblockAt = g.time + 2.5;
+    spawnRoadblock(g);
+  }
+}
+
+// --- AIR ONE --------------------------------------------------------------------------------
+// At four stars the helicopter joins: it orbits the suspect, and inside its searchlight
+// range the player counts as watched, so the heat will not cool. It also talks the
+// cruisers in closer (see spawnPoliceCar).
+
+export function updateAirOne(g, dt) {
+  const p = g.player;
+  if (!g.heli && g.stars >= AIR_ONE_STARS) {
+    const bearing = g.rng() * Math.PI * 2;
+    g.heli = {
+      x: p.x + Math.cos(bearing) * 700,
+      y: p.y + Math.sin(bearing) * 700,
+      angle: bearing + Math.PI,
+      orbitA: bearing,
+      leaving: false,
+    };
+  }
+  const heli = g.heli;
+  if (!heli) return;
+  if (g.stars < AIR_ONE_STARS) heli.leaving = true;
+  if (heli.leaving) {
+    const away = Math.atan2(heli.y - p.y, heli.x - p.x);
+    heli.angle = away;
+    heli.x += Math.cos(away) * 430 * dt;
+    heli.y += Math.sin(away) * 430 * dt;
+    if (dist(heli.x, heli.y, p.x, p.y) > 850) g.heli = null;
+    return;
+  }
+  heli.orbitA += dt * 0.35;
+  const tx = p.x + Math.cos(heli.orbitA) * 130;
+  const ty = p.y + Math.sin(heli.orbitA) * 130;
+  const dx = tx - heli.x;
+  const dy = ty - heli.y;
+  const d = Math.hypot(dx, dy);
+  if (d > 1) {
+    const step = Math.min(d, 430 * dt);
+    heli.x += (dx / d) * step;
+    heli.y += (dy / d) * step;
+    if (step > 0.5) heli.angle = Math.atan2(dy, dx);
+  }
+}
+
 function spawnPoliceCar(g) {
-  const spot = roadPointNear(g, 540, 760);
+  // With AIR ONE overhead, reinforcements are talked in closer than usual.
+  const spot = g.heli ? roadPointNear(g, 360, 560) : roadPointNear(g, 540, 760);
   if (!spot) return;
   const car = makeCar(POLICE_CAR_TYPE, spot.x, spot.y, 0, POLICE_CAR_TYPE.colors[0]);
   car.driver = 'police';
@@ -90,6 +253,10 @@ export function updateWanted(g, dt) {
       }
     }
   }
+  // AIR ONE's searchlight counts as being watched: the heat will not cool under it.
+  if (!seen && g.heli && !g.heli.leaving && dist(g.heli.x, g.heli.y, p.x, p.y) < AIR_ONE_RANGE) {
+    seen = true;
+  }
   g.watched = seen;
   const decay = seen ? HEAT_DECAY_SEEN : HEAT_DECAY_HIDDEN;
   g.heat = Math.max(0, g.heat - decay * dt);
@@ -106,10 +273,14 @@ export function updatePolice(g, dt) {
   const p = g.player;
   const stars = g.stars;
 
+  updateDispatch(g);
+  updateRoadblocks(g, dt);
+  updateAirOne(g, dt);
+
   // --- keep the force at the strength the stars demand -------------------------------
   let carCount = 0;
   let footCount = 0;
-  for (const car of g.cars) if (car.driver === 'police') carCount++;
+  for (const car of g.cars) if (car.driver === 'police' && !car.roadblock) carCount++;
   for (const cop of g.cops) if (cop.state !== 'dead') footCount++;
 
   if (stars > 0) {
@@ -138,9 +309,11 @@ export function updatePolice(g, dt) {
       if (car.driver === 'police') {
         car.driver = 'traffic';
         car.copOut = false;
+        car.roadblock = false;
         giveTrafficBrain(car, g.rng);
       }
     }
+    g.roadblocks = [];
     for (let i = g.cops.length - 1; i >= 0; i--) {
       if (g.cops[i].state !== 'dead') g.cops.splice(i, 1);
     }
@@ -150,6 +323,19 @@ export function updatePolice(g, dt) {
   // --- drive the cruisers --------------------------------------------------------------
   for (const car of g.cars) {
     if (car.driver !== 'police') continue;
+    if (car.roadblock) {
+      // A roadblock car holds its post; shoved off it, it creeps back and re-aligns.
+      const postD = dist(car.x, car.y, car.postX, car.postY);
+      if (postD <= 14) {
+        car.angle += clamp(angleDelta(car.angle, car.postAngle), -2.4 * dt, 2.4 * dt);
+        stepCar(car, { throttle: 0, steer: 0, brake: true }, dt, g.city);
+      } else {
+        const wantPost = Math.atan2(car.postY - car.y, car.postX - car.x);
+        const steerPost = clamp(angleDelta(car.angle, wantPost) * 2.3, -1, 1);
+        stepCar(car, { throttle: 0.35, steer: steerPost, brake: false }, dt, g.city);
+      }
+      continue;
+    }
     if (dist(car.x, car.y, p.x, p.y) > 1200) {
       car.driver = 'traffic';
       giveTrafficBrain(car, g.rng);

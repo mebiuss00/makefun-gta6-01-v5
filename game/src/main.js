@@ -45,6 +45,11 @@ const g = {
   effects: [],
   heat: 0,
   stars: 0,
+  roadblocks: [],
+  heli: null,
+  dispatch: null,
+  announcedStars: 0,
+  roadblockAt: 0,
   watched: false,
   bustProgress: 0,
   lastCrimeAt: -99,
@@ -121,6 +126,10 @@ function respawnAfterSplash() {
   p.angle = -Math.PI / 2;
   g.heat = 0;
   g.stars = 0;
+  g.roadblocks = [];
+  g.heli = null;
+  g.dispatch = null;
+  g.announcedStars = 0;
   g.bustProgress = 0;
   // The force stands down.
   for (const car of g.cars) if (car.driver === 'police') car.driver = null;
@@ -425,6 +434,10 @@ function startPlay(useSave) {
   g.effects = [];
   g.heat = 0;
   g.stars = 0;
+  g.roadblocks = [];
+  g.heli = null;
+  g.dispatch = null;
+  g.announcedStars = 0;
   g.bustProgress = 0;
   g.mission = null;
   g.errand = null;

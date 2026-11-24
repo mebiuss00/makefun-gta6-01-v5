@@ -74,5 +74,12 @@ export const CAR_TYPES = [
 ];
 export const POLICE_CAR_TYPE = { id: 'cruiser', name: 'PPD Cruiser', length: 49, width: 24, accel: 300, maxSpeed: 368, reverse: 110, grip: 3.6, hp: 220, colors: ['#1d2733'] };
 
+// PPD dispatch escalation: roadblocks join the chase at three stars, and at four the
+// AIR ONE helicopter keeps its searchlight — and the heat — on the suspect.
+export const ROADBLOCK_STARS = 3;
+export const ROADBLOCKS_BY_STAR = [0, 0, 0, 1, 1, 2]; // live roadblocks per star count
+export const AIR_ONE_STARS = 4;
+export const AIR_ONE_RANGE = 460; // inside this distance from the helicopter, the player counts as watched
+
 // Save file key in localStorage.
 export const SAVE_KEY = 'palmera-heat-vice-run/save/v1';
